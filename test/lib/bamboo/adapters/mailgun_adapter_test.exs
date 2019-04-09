@@ -207,7 +207,8 @@ defmodule Bamboo.MailgunAdapterTest do
         |> Email.put_header("X-My-Header", "my_header_value")
         |> Email.put_header("X-Heroes", ["mario", "luigi"])
         |> Email.put_header("X-Mailgun-Tag", "TAG1")
-        |> Email.put_header("X-Mailgun-Tag", "TAG2", :combine)
+        |> Email.put_header("X-Mailgun-Tag", "TAG2")
+        |> Email.put_header("X-Mailgun-Tag", "TAG3", :combine)
         |> Email.put_private(:mailgun_custom_vars, %{my_custom_var: 42, other_custom_var: 43})
         |> Email.put_attachment(attachment_source_path)
 
@@ -236,7 +237,6 @@ defmodule Bamboo.MailgunAdapterTest do
       assert {"authorization", "Basic #{hashed_token}"} in headers
     end
   end
-
 
   test "raises if the response is not a success" do
     email = new_email(from: "INVALID_EMAIL")

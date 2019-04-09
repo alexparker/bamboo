@@ -109,6 +109,11 @@ defmodule Bamboo.MailgunAdapter do
     |> put_custom_vars(email)
     |> filter_non_empty_mailgun_fields
     |> encode_body
+    |> case do
+      debug ->
+        IO.inspect(debug)
+        debug
+    end
   end
 
   defp put_from(body, %Email{from: from}), do: Map.put(body, :from, prepare_recipient(from))
@@ -189,15 +194,37 @@ defmodule Bamboo.MailgunAdapter do
   end
 
   defp encode_body(%{attachments: attachments} = body) do
+    IO.inspect(body)
+
     {
       :multipart,
       # Drop the remaining non-Mailgun fields
       # Append the attachment parts
       body
       |> Map.drop(@internal_fields)
-      |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
+      |> Enum.reduce([], &encode_key_values/2)
       |> Kernel.++(attachments)
     }
+  end
+
+  ###################################################
+  # TODO
+  # Just brainstorming here
+  # Not sure where the normalize_headers from
+  # Bamboo.Mailer.normalize_headers/2 fits in to the
+  # flow of data.
+  #
+  ###################################################
+  defp encode_key_values({k, v}, list) do
+    case v do
+      values when is_list(values) ->
+        values
+        |> Enum.map(&{to_string(k), to_string(&1)})
+        |> Kernel.++(list)
+
+      value ->
+        [{to_string(k), to_string(value)} | list]
+    end
   end
 
   defp encode_body(body_without_attachments), do: Plug.Conn.Query.encode(body_without_attachments)
