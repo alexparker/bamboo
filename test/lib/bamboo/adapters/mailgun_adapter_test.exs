@@ -120,116 +120,123 @@ defmodule Bamboo.MailgunAdapterTest do
     System.delete_env("MAILGUN_API_KEY")
   end
 
-  test "deliver/2 sends the to the right url" do
-    new_email() |> MailgunAdapter.deliver(@config)
+  describe "deliver/2" do
+    test "sends the to the right url" do
+      new_email() |> MailgunAdapter.deliver(@config)
 
-    assert_receive {:fake_mailgun, %{request_path: request_path}}
+      assert_receive {:fake_mailgun, %{request_path: request_path}}
 
-    assert request_path == "/test.tt/messages"
+      assert request_path == "/test.tt/messages"
+    end
+
+    test "correctly formats recipients" do
+      email =
+        new_email(
+          to: [{"To", "to@bar.com"}, {nil, "noname@bar.com"}],
+          cc: [{"CC", "cc@bar.com"}],
+          bcc: [{"BCC", "bcc@bar.com"}]
+        )
+
+      email |> MailgunAdapter.deliver(@config)
+
+      assert_receive {:fake_mailgun, %{params: params}}
+      assert params["to"] == "To <to@bar.com>,noname@bar.com"
+      assert params["cc"] == "CC <cc@bar.com>"
+      assert params["bcc"] == "BCC <bcc@bar.com>"
+    end
+
+    test "correctly formats reply-to" do
+      email =
+        new_email(
+          from: "from@foo.com",
+          subject: "My Subject",
+          text_body: "TEXT BODY",
+          html_body: "HTML BODY"
+        )
+        |> Email.put_header("reply-to", "random@foo.com")
+
+      MailgunAdapter.deliver(email, @config)
+
+      assert_receive {:fake_mailgun, %{params: params}}
+
+      assert params["h:Reply-To"] == "random@foo.com"
+    end
+
+    test "without attachments sends from, subject, text body, html body, headers and custom vars" do
+      email =
+        new_email(
+          from: "from@foo.com",
+          subject: "My Subject",
+          text_body: "TEXT BODY",
+          html_body: "HTML BODY"
+        )
+        |> Email.put_header("X-My-Header", "my_header_value")
+        |> Email.put_header("Reply-To", "random@foo.com")
+        |> Email.put_private(:mailgun_custom_vars, %{my_custom_var: 42, other_custom_var: 43})
+
+      MailgunAdapter.deliver(email, @config)
+
+      assert_receive {:fake_mailgun, %{params: params, req_headers: headers}}
+
+      assert params["from"] == elem(email.from, 1)
+      assert params["subject"] == email.subject
+      assert params["text"] == email.text_body
+      assert params["html"] == email.html_body
+      assert params["h:X-My-Header"] == "my_header_value"
+      assert params["v:my_custom_var"] == "42"
+      assert params["v:other_custom_var"] == "43"
+      assert params["h:Reply-To"] == "random@foo.com"
+
+      hashed_token = Base.encode64("api:" <> @config.api_key)
+      assert {"authorization", "Basic #{hashed_token}"} in headers
+    end
+
+    # Testing separately with attachments because of significant ouput difference.
+    # ie (MIME multipart body instead of URL-encoded form)
+    test "with attachments sends from, subject, text body, html body, headers and custom vars and attachments" do
+      attachment_source_path = Path.join(__DIR__, "../../../support/attachment.txt")
+
+      email =
+        new_email(
+          from: "from@foo.com",
+          subject: "My Subject",
+          text_body: "TEXT BODY",
+          html_body: "HTML BODY"
+        )
+        |> Email.put_header("Reply-To", "random@foo.com")
+        |> Email.put_header("X-My-Header", "my_header_value")
+        |> Email.put_header("X-Heroes", ["mario", "luigi"])
+        |> Email.put_header("X-Mailgun-Tag", "TAG1")
+        |> Email.put_header("X-Mailgun-Tag", "TAG2", :combine)
+        |> Email.put_private(:mailgun_custom_vars, %{my_custom_var: 42, other_custom_var: 43})
+        |> Email.put_attachment(attachment_source_path)
+
+      MailgunAdapter.deliver(email, @config)
+
+      assert_receive {:fake_mailgun, %{params: params, req_headers: headers}}
+
+      assert MailgunAdapter.supports_attachments?()
+      assert params["from"] == elem(email.from, 1)
+      assert params["subject"] == email.subject
+      assert params["text"] == email.text_body
+      assert params["html"] == email.html_body
+      assert params["h:X-My-Header"] == "my_header_value"
+      assert params["v:my_custom_var"] == "42"
+      assert params["v:other_custom_var"] == "43"
+      assert params["h:Reply-To"] == "random@foo.com"
+
+      assert %Plug.Upload{content_type: content_type, filename: filename, path: download_path} =
+               params["attachment"]
+
+      assert content_type == "application/octet-stream"
+      assert filename == "attachment.txt"
+      assert File.read!(download_path) == File.read!(attachment_source_path)
+
+      hashed_token = Base.encode64("api:" <> @config.api_key)
+      assert {"authorization", "Basic #{hashed_token}"} in headers
+    end
   end
 
-  test "deliver/2 sends from, subject, text body, html body, headers and custom vars" do
-    email =
-      new_email(
-        from: "from@foo.com",
-        subject: "My Subject",
-        text_body: "TEXT BODY",
-        html_body: "HTML BODY"
-      )
-      |> Email.put_header("X-My-Header", "my_header_value")
-      |> Email.put_header("Reply-To", "random@foo.com")
-      |> Email.put_private(:mailgun_custom_vars, %{my_custom_var: 42, other_custom_var: 43})
-
-    MailgunAdapter.deliver(email, @config)
-
-    assert_receive {:fake_mailgun, %{params: params, req_headers: headers}}
-
-    assert params["from"] == elem(email.from, 1)
-    assert params["subject"] == email.subject
-    assert params["text"] == email.text_body
-    assert params["html"] == email.html_body
-    assert params["h:X-My-Header"] == "my_header_value"
-    assert params["v:my_custom_var"] == "42"
-    assert params["v:other_custom_var"] == "43"
-    assert params["h:Reply-To"] == "random@foo.com"
-
-    hashed_token = Base.encode64("api:" <> @config.api_key)
-    assert {"authorization", "Basic #{hashed_token}"} in headers
-  end
-
-  # We keep two separate tests, with and without attachment, because the output produced by the adapter changes a lot. (MIME multipart body instead of URL-encoded form)
-  test "deliver/2 sends from, subject, text body, html body, headers, custom vars and attachment" do
-    attachment_source_path = Path.join(__DIR__, "../../../support/attachment.txt")
-
-    email =
-      new_email(
-        from: "from@foo.com",
-        subject: "My Subject",
-        text_body: "TEXT BODY",
-        html_body: "HTML BODY"
-      )
-      |> Email.put_header("Reply-To", "random@foo.com")
-      |> Email.put_header("X-My-Header", "my_header_value")
-      |> Email.put_private(:mailgun_custom_vars, %{my_custom_var: 42, other_custom_var: 43})
-      |> Email.put_attachment(attachment_source_path)
-
-    MailgunAdapter.deliver(email, @config)
-
-    assert_receive {:fake_mailgun, %{params: params, req_headers: headers}}
-
-    assert MailgunAdapter.supports_attachments?()
-    assert params["from"] == elem(email.from, 1)
-    assert params["subject"] == email.subject
-    assert params["text"] == email.text_body
-    assert params["html"] == email.html_body
-    assert params["h:X-My-Header"] == "my_header_value"
-    assert params["v:my_custom_var"] == "42"
-    assert params["v:other_custom_var"] == "43"
-    assert params["h:Reply-To"] == "random@foo.com"
-
-    assert %Plug.Upload{content_type: content_type, filename: filename, path: download_path} =
-             params["attachment"]
-
-    assert content_type == "application/octet-stream"
-    assert filename == "attachment.txt"
-    assert File.read!(download_path) == File.read!(attachment_source_path)
-
-    hashed_token = Base.encode64("api:" <> @config.api_key)
-    assert {"authorization", "Basic #{hashed_token}"} in headers
-  end
-
-  test "deliver/2 correctly formats recipients" do
-    email =
-      new_email(
-        to: [{"To", "to@bar.com"}, {nil, "noname@bar.com"}],
-        cc: [{"CC", "cc@bar.com"}],
-        bcc: [{"BCC", "bcc@bar.com"}]
-      )
-
-    email |> MailgunAdapter.deliver(@config)
-
-    assert_receive {:fake_mailgun, %{params: params}}
-    assert params["to"] == "To <to@bar.com>,noname@bar.com"
-    assert params["cc"] == "CC <cc@bar.com>"
-    assert params["bcc"] == "BCC <bcc@bar.com>"
-  end
-
-  test "deliver/2 correctly formats reply-to" do
-    email =
-      new_email(
-        from: "from@foo.com",
-        subject: "My Subject",
-        text_body: "TEXT BODY",
-        html_body: "HTML BODY"
-      )
-      |> Email.put_header("reply-to", "random@foo.com")
-
-    MailgunAdapter.deliver(email, @config)
-
-    assert_receive {:fake_mailgun, %{params: params}}
-
-    assert params["h:Reply-To"] == "random@foo.com"
-  end
 
   test "raises if the response is not a success" do
     email = new_email(from: "INVALID_EMAIL")
