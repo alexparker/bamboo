@@ -231,7 +231,7 @@ defmodule Bamboo.Email do
       ...> Email.put_header(email, "x-tag", ["bar", "qux" ], :combine)
       %Bamboo.Email{headers: %{"x-tag" => ["bar", "qux", "foo"]}}
   """
-  @spec put_header(__MODULE__.t(), String.t(), String.t(), :replace | :combine) :: __MODULE__.t()
+  @spec put_header(__MODULE__.t(), String.t(), String.t() | List.t(), :replace | :combine) :: __MODULE__.t()
   def put_header(email, name, value, on_conflict \\ :replace)
 
   def put_header(email, _name, value, _) when not is_binary(value) and not is_list(value) do
